@@ -7,8 +7,8 @@
 package main
 
 import (
-	"github.com/huichen/wukong/engine"
-	"github.com/huichen/wukong/types"
+	"github.com/yingtu/wukong/engine"
+	"github.com/yingtu/wukong/types"
 	"log"
 )
 

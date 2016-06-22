@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/huichen/wukong/types"
+	"github.com/yingtu/wukong/types"
 )
 
 type rankerAddDocRequest struct {

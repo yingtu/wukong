@@ -2,7 +2,7 @@ package core
 
 import (
 	"fmt"
-	"github.com/huichen/wukong/types"
+	"github.com/yingtu/wukong/types"
 )
 
 func indicesToString(indexer *Indexer, token string) (output string) {
