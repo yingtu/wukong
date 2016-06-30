@@ -93,7 +93,9 @@ func (indexer *Indexer) AddDocument(document *types.DocumentIndex) {
 		position, found := indexer.searchIndex(
 			indices, 0, indexer.getIndexLength(indices)-1, document.DocId)
 		if found {
-			docIdIsNew = false
+			if existed, found := indexer.tableLock.docs[document.DocId]; found && existed {
+				docIdIsNew = false
+			}
 
 			// 覆盖已有的索引项
 			switch indexer.initOptions.IndexType {
@@ -208,7 +210,7 @@ func (indexer *Indexer) Lookup(
 		}
 
 		if found {
-			if _, ok := indexer.tableLock.docs[baseDocId]; !ok {
+			if existed, found := indexer.tableLock.docs[baseDocId]; !(found && existed) {
 				continue
 			}
 			indexedDoc := types.IndexedDocument{}
@@ -417,8 +419,10 @@ func (indexer *Indexer) RemoveDoc(docId uint64) {
 		log.Fatal("排序器尚未初始化")
 	}
 
-	indexer.tableLock.Lock()
-	delete(indexer.tableLock.docs, docId)
-	indexer.numDocuments--
-	indexer.tableLock.Unlock()
+	if existed, found := indexer.tableLock.docs[docId]; found && existed {
+		indexer.tableLock.Lock()
+		delete(indexer.tableLock.docs, docId)
+		indexer.numDocuments--
+		indexer.tableLock.Unlock()
+	}
 }

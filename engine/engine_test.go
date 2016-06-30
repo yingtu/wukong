@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type ScoringFields struct {
@@ -308,6 +309,61 @@ func TestEngineIndexDocumentWithTokens(t *testing.T) {
 	utils.Expect(t, "[0 18]", outputs.Docs[2].TokenSnippetLocations)
 }
 
+func TestEngineIndexDocumentOnlyWithLabels(t *testing.T) {
+	var engine Engine
+	engine.Init(types.EngineInitOptions{
+		SegmenterDictionaries: "../testdata/test_dict.txt",
+	})
+
+	docId := uint64(0)
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Labels: []string{"中国", "人口"},
+		Fields: ScoringFields{1, 2, 3},
+	})
+	docId++
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Labels: []string{"中国", "十三亿", "人口"},
+		Fields: ScoringFields{0, 9, 1},
+	})
+
+	engine.FlushIndex()
+	outputs := engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
+	utils.Expect(t, "0", len(outputs.Tokens))
+	utils.Expect(t, "2", len(outputs.Docs))
+	utils.Expect(t, "[0]", outputs.Docs[0].Scores)
+
+	output := engine.LookupDocumentField(1)
+	utils.Expect(t, "1", output.DocId)
+	utils.Expect(t, "{0 9 1}", output.Fields)
+
+	engine.UpdateDocumentField(1, ScoringFields{3, 2, 1})
+	// 因为 FlushIndex 暂时不支持 Update 操作，这里手动等待
+	time.Sleep(2 * time.Second)
+	output = engine.LookupDocumentField(1)
+	utils.Expect(t, "{3 2 1}", output.Fields)
+
+	engine.RemoveDocument(1)
+	engine.FlushIndex()
+	outputs = engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
+	utils.Expect(t, "1", len(outputs.Docs))
+
+	output = engine.LookupDocumentField(1)
+	utils.Expect(t, "<nil>", output.Fields)
+
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Labels: []string{"中国", "十三亿", "人口", "尴尬啊"},
+		Fields: ScoringFields{7, 8, 9},
+	})
+
+	engine.FlushIndex()
+	outputs = engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
+	utils.Expect(t, "2", len(outputs.Docs))
+
+	output = engine.LookupDocumentField(1)
+	utils.Expect(t, "1", output.DocId)
+	utils.Expect(t, "{7 8 9}", output.Fields)
+}
+
 func TestEngineIndexDocumentWithPersistentStorage(t *testing.T) {
 	gob.Register(ScoringFields{})
 	var engine Engine
@@ -380,6 +436,7 @@ func TestCountDocsOnly(t *testing.T) {
 
 	AddDocs(&engine)
 	engine.RemoveDocument(4)
+	engine.FlushIndex()
 
 	outputs := engine.Search(types.SearchRequest{Text: "中国人口", CountDocsOnly: true})
 	utils.Expect(t, "0", len(outputs.Docs))

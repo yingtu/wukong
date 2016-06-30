@@ -33,6 +33,14 @@ func (engine *Engine) indexerAddDocumentWorker(shard int) {
 	}
 }
 
+func (engine *Engine) indexerRemoveDocWorker(shard int) {
+	for {
+		request := <-engine.indexerRemoveDocChannels[shard]
+		engine.indexers[shard].RemoveDoc(request.docId)
+		atomic.AddUint64(&engine.numDocumentsRemoved, 1)
+	}
+}
+
 func (engine *Engine) indexerLookupWorker(shard int) {
 	for {
 		request := <-engine.indexerLookupChannels[shard]
@@ -77,12 +85,5 @@ func (engine *Engine) indexerLookupWorker(shard int) {
 			rankerReturnChannel: request.rankerReturnChannel,
 		}
 		engine.rankerRankChannels[shard] <- rankerRequest
-	}
-}
-
-func (engine *Engine) indexerRemoveDocWorker(shard int) {
-	for {
-		request := <-engine.indexerRemoveDocChannels[shard]
-		engine.indexers[shard].RemoveDoc(request.docId)
 	}
 }

@@ -9,6 +9,15 @@ type rankerAddDocRequest struct {
 	fields interface{}
 }
 
+type rankerRemoveDocRequest struct {
+	docId uint64
+}
+
+type rankerLookupDocRequest struct {
+	docId               uint64
+	rankerReturnChannel chan interface{}
+}
+
 type rankerRankRequest struct {
 	docs                []types.IndexedDocument
 	options             types.RankOptions
@@ -21,14 +30,32 @@ type rankerReturnRequest struct {
 	numDocs int
 }
 
-type rankerRemoveDocRequest struct {
-	docId uint64
-}
-
 func (engine *Engine) rankerAddDocWorker(shard int) {
 	for {
 		request := <-engine.rankerAddDocChannels[shard]
 		engine.rankers[shard].AddDoc(request.docId, request.fields)
+	}
+}
+
+func (engine *Engine) rankerRemoveDocWorker(shard int) {
+	for {
+		request := <-engine.rankerRemoveDocChannels[shard]
+		engine.rankers[shard].RemoveDoc(request.docId)
+	}
+}
+
+func (engine *Engine) rankerUpdateDocWorker(shard int) {
+	for {
+		request := <-engine.rankerUpdateDocChannels[shard]
+		engine.rankers[shard].UpdateDoc(request.docId, request.fields)
+	}
+}
+
+func (engine *Engine) rankerLookupDocWorker(shard int) {
+	for {
+		request := <-engine.rankerLookupDocChannels[shard]
+		fields := engine.rankers[shard].LookupDoc(request.docId)
+		request.rankerReturnChannel <- fields
 	}
 }
 
@@ -41,12 +68,5 @@ func (engine *Engine) rankerRankWorker(shard int) {
 		request.options.OutputOffset = 0
 		outputDocs, numDocs := engine.rankers[shard].Rank(request.docs, request.options, request.countDocsOnly)
 		request.rankerReturnChannel <- rankerReturnRequest{docs: outputDocs, numDocs: numDocs}
-	}
-}
-
-func (engine *Engine) rankerRemoveDocWorker(shard int) {
-	for {
-		request := <-engine.rankerRemoveDocChannels[shard]
-		engine.rankers[shard].RemoveDoc(request.docId)
 	}
 }

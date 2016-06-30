@@ -24,10 +24,12 @@ const (
 
 type Engine struct {
 	// 计数器，用来统计有多少文档被索引等信息
-	numDocumentsIndexed uint64
 	numIndexingRequests uint64
-	numTokenIndexAdded  uint64
+	numRemovingRequests uint64
+	numDocumentsIndexed uint64
+	numDocumentsRemoved uint64
 	numDocumentsStored  uint64
+	numTokenIndexAdded  uint64
 
 	// 记录初始化参数
 	initOptions types.EngineInitOptions
@@ -43,12 +45,14 @@ type Engine struct {
 	segmenterChannel           chan segmenterRequest
 	indexerAddDocumentChannels []chan indexerAddDocumentRequest
 	indexerRemoveDocChannels   []chan indexerRemoveDocRequest
-	rankerAddDocChannels       []chan rankerAddDocRequest
+	indexerLookupChannels      []chan indexerLookupRequest
 
 	// 建立排序器使用的通信通道
-	indexerLookupChannels   []chan indexerLookupRequest
-	rankerRankChannels      []chan rankerRankRequest
+	rankerAddDocChannels    []chan rankerAddDocRequest
 	rankerRemoveDocChannels []chan rankerRemoveDocRequest
+	rankerUpdateDocChannels []chan rankerAddDocRequest
+	rankerLookupDocChannels []chan rankerLookupDocRequest
+	rankerRankChannels      []chan rankerRankRequest
 
 	// 建立持久存储使用的通信通道
 	persistentStorageIndexDocumentChannels []chan persistentStorageIndexDocumentRequest
@@ -110,19 +114,29 @@ func (engine *Engine) Init(options types.EngineInitOptions) {
 	// 初始化排序器通道
 	engine.rankerAddDocChannels = make(
 		[]chan rankerAddDocRequest, options.NumShards)
-	engine.rankerRankChannels = make(
-		[]chan rankerRankRequest, options.NumShards)
 	engine.rankerRemoveDocChannels = make(
 		[]chan rankerRemoveDocRequest, options.NumShards)
+	engine.rankerUpdateDocChannels = make(
+		[]chan rankerAddDocRequest, options.NumShards)
+	engine.rankerLookupDocChannels = make(
+		[]chan rankerLookupDocRequest, options.NumShards)
+	engine.rankerRankChannels = make(
+		[]chan rankerRankRequest, options.NumShards)
 	for shard := 0; shard < options.NumShards; shard++ {
 		engine.rankerAddDocChannels[shard] = make(
 			chan rankerAddDocRequest,
 			options.RankerBufferLength)
-		engine.rankerRankChannels[shard] = make(
-			chan rankerRankRequest,
-			options.RankerBufferLength)
 		engine.rankerRemoveDocChannels[shard] = make(
 			chan rankerRemoveDocRequest,
+			options.RankerBufferLength)
+		engine.rankerUpdateDocChannels[shard] = make(
+			chan rankerAddDocRequest,
+			options.RankerBufferLength)
+		engine.rankerLookupDocChannels[shard] = make(
+			chan rankerLookupDocRequest,
+			options.RankerBufferLength)
+		engine.rankerRankChannels[shard] = make(
+			chan rankerRankRequest,
 			options.RankerBufferLength)
 	}
 
@@ -150,6 +164,8 @@ func (engine *Engine) Init(options types.EngineInitOptions) {
 		go engine.indexerRemoveDocWorker(shard)
 		go engine.rankerAddDocWorker(shard)
 		go engine.rankerRemoveDocWorker(shard)
+		go engine.rankerUpdateDocWorker(shard)
+		go engine.rankerLookupDocWorker(shard)
 
 		for i := 0; i < options.NumIndexerThreadsPerShard; i++ {
 			go engine.indexerLookupWorker(shard)
@@ -216,10 +232,10 @@ func (engine *Engine) Init(options types.EngineInitOptions) {
 //
 // 输入参数：
 // 	docId	标识文档编号，必须唯一
-//	data	见DocumentIndexData注释
+// 	data	见DocumentIndexData注释
 //
 // 注意：
-//      1. 这个函数是线程安全的，请尽可能并发调用以提高索引速度
+// 	1. 这个函数是线程安全的，请尽可能并发调用以提高索引速度
 // 	2. 这个函数调用是非同步的，也就是说在函数返回时有可能文档还没有加入索引中，因此
 //         如果立刻调用Search可能无法查询到这个文档。强制刷新索引请调用FlushIndex函数。
 func (engine *Engine) IndexDocument(docId uint64, data types.DocumentIndexData) {
@@ -237,7 +253,7 @@ func (engine *Engine) internalIndexDocument(docId uint64, data types.DocumentInd
 	}
 
 	atomic.AddUint64(&engine.numIndexingRequests, 1)
-	hash := murmur.Murmur3([]byte(fmt.Sprint("%d%s", docId, data.Content)))
+	hash := murmur.Murmur3([]byte(fmt.Sprint("%d%s", docId, data.GetContent())))
 	engine.segmenterChannel <- segmenterRequest{
 		docId: docId, hash: hash, data: data}
 }
@@ -253,6 +269,7 @@ func (engine *Engine) RemoveDocument(docId uint64) {
 		log.Fatal("必须先初始化引擎")
 	}
 
+	atomic.AddUint64(&engine.numRemovingRequests, 1)
 	for shard := 0; shard < engine.initOptions.NumShards; shard++ {
 		engine.indexerRemoveDocChannels[shard] <- indexerRemoveDocRequest{docId: docId}
 		engine.rankerRemoveDocChannels[shard] <- rankerRemoveDocRequest{docId: docId}
@@ -260,9 +277,62 @@ func (engine *Engine) RemoveDocument(docId uint64) {
 
 	if engine.initOptions.UsePersistentStorage {
 		// 从数据库中删除
+		// NOTE: (zanwen) 为保证数据安全，需要 channel 来搞
 		hash := murmur.Murmur3([]byte(fmt.Sprint("%d", docId))) % uint32(engine.initOptions.PersistentStorageShards)
 		go engine.persistentStorageRemoveDocumentWorker(docId, hash)
 	}
+}
+
+// 更新文档的评分字段
+//
+// 输入参数：
+// 	docId	标识文档编号，必须唯一
+// 	field	文档评分字段
+//
+// 注意：这个函数仅从排序器中更新文档，索引器不会发生变化。
+func (engine *Engine) UpdateDocumentField(docId uint64, fields interface{}) {
+	if !engine.initialized {
+		log.Fatal("必须先初始化引擎")
+	}
+
+	for shard := 0; shard < engine.initOptions.NumShards; shard++ {
+		engine.rankerUpdateDocChannels[shard] <- rankerAddDocRequest{docId: docId, fields: fields}
+	}
+
+	if engine.initOptions.UsePersistentStorage {
+		// NOTE: (zanwen) 从数据库中更新，因为数据库删除操作没有 channel 控制，暂时难搞
+	}
+}
+
+// 查找文档的评分字段
+//
+// 输入参数：
+// 	docId	标识文档编号，必须唯一
+func (engine *Engine) LookupDocumentField(docId uint64) (output types.LookupFieldsResponse) {
+	if !engine.initialized {
+		log.Fatal("必须先初始化引擎")
+	}
+
+	// 建立排序器返回的通信通道
+	rankerReturnChannel := make(
+		chan interface{}, engine.initOptions.NumShards)
+	lookupDocRequest := rankerLookupDocRequest{
+		docId:               docId,
+		rankerReturnChannel: rankerReturnChannel,
+	}
+	for shard := 0; shard < engine.initOptions.NumShards; shard++ {
+		engine.rankerLookupDocChannels[shard] <- lookupDocRequest
+	}
+
+	output.DocId = docId
+	// 从通信通道读取排序器的输出
+	for shard := 0; shard < engine.initOptions.NumShards; shard++ {
+		rankerOutput := <-rankerReturnChannel
+		if rankerOutput != nil {
+			output.Fields = rankerOutput
+		}
+	}
+	return
 }
 
 // 阻塞等待直到所有索引添加完毕
@@ -270,6 +340,7 @@ func (engine *Engine) FlushIndex() {
 	for {
 		runtime.Gosched()
 		if engine.numIndexingRequests == engine.numDocumentsIndexed &&
+			engine.numRemovingRequests*uint64(engine.initOptions.NumShards) == engine.numDocumentsRemoved &&
 			(!engine.initOptions.UsePersistentStorage ||
 				engine.numIndexingRequests == engine.numDocumentsStored) {
 			return

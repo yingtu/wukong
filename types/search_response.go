@@ -18,6 +18,13 @@ type SearchResponse struct {
 	NumDocs int
 }
 
+type LookupFieldsResponse struct {
+	DocId uint64
+
+	// 文档的评分字段，可以接纳任何类型的结构体
+	Fields interface{}
+}
+
 type ScoredDocument struct {
 	DocId uint64
 

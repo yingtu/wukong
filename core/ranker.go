@@ -51,6 +51,32 @@ func (ranker *Ranker) RemoveDoc(docId uint64) {
 	ranker.lock.Unlock()
 }
 
+// 更新某个文档的评分字段
+func (ranker *Ranker) UpdateDoc(docId uint64, fields interface{}) {
+	if ranker.initialized == false {
+		log.Fatal("排序器尚未初始化")
+	}
+
+	if existed, found := ranker.lock.docs[docId]; found && existed {
+		ranker.lock.Lock()
+		delete(ranker.lock.fields, docId)
+		ranker.lock.fields[docId] = fields
+		ranker.lock.Unlock()
+	}
+}
+
+// 查找某个文档的评分字段
+func (ranker *Ranker) LookupDoc(docId uint64) interface{} {
+	if ranker.initialized == false {
+		log.Fatal("排序器尚未初始化")
+	}
+
+	if existed, found := ranker.lock.docs[docId]; found && existed {
+		return ranker.lock.fields[docId]
+	}
+	return nil
+}
+
 // 给文档评分并排序
 func (ranker *Ranker) Rank(
 	docs []types.IndexedDocument, options types.RankOptions, countDocsOnly bool) (types.ScoredDocuments, int) {
