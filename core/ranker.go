@@ -57,11 +57,15 @@ func (ranker *Ranker) UpdateDoc(docId uint64, fields interface{}) {
 		log.Fatal("排序器尚未初始化")
 	}
 
+	ranker.lock.RLock()
 	if existed, found := ranker.lock.docs[docId]; found && existed {
+		ranker.lock.RUnlock()
 		ranker.lock.Lock()
 		delete(ranker.lock.fields, docId)
 		ranker.lock.fields[docId] = fields
 		ranker.lock.Unlock()
+	} else {
+		ranker.lock.RUnlock()
 	}
 }
 
@@ -71,6 +75,8 @@ func (ranker *Ranker) LookupDoc(docId uint64) interface{} {
 		log.Fatal("排序器尚未初始化")
 	}
 
+	ranker.lock.RLock()
+	defer ranker.lock.RUnlock()
 	if existed, found := ranker.lock.docs[docId]; found && existed {
 		return ranker.lock.fields[docId]
 	}

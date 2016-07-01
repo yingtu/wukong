@@ -419,10 +419,14 @@ func (indexer *Indexer) RemoveDoc(docId uint64) {
 		log.Fatal("排序器尚未初始化")
 	}
 
+	indexer.tableLock.RLock()
 	if existed, found := indexer.tableLock.docs[docId]; found && existed {
+		indexer.tableLock.RUnlock()
 		indexer.tableLock.Lock()
 		delete(indexer.tableLock.docs, docId)
 		indexer.numDocuments--
 		indexer.tableLock.Unlock()
+	} else {
+		indexer.tableLock.RUnlock()
 	}
 }
