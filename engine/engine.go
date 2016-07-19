@@ -2,12 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"github.com/huichen/murmur"
-	"github.com/huichen/sego"
-	"github.com/yingtu/wukong/core"
-	"github.com/yingtu/wukong/storage"
-	"github.com/yingtu/wukong/types"
-	"github.com/yingtu/wukong/utils"
 	"log"
 	"os"
 	"runtime"
@@ -15,6 +9,13 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/huichen/murmur"
+	"github.com/huichen/sego"
+	"github.com/yingtu/wukong/core"
+	"github.com/yingtu/wukong/storage"
+	"github.com/yingtu/wukong/types"
+	"github.com/yingtu/wukong/utils"
 )
 
 const (
@@ -24,12 +25,14 @@ const (
 
 type Engine struct {
 	// 计数器，用来统计有多少文档被索引等信息
-	numIndexingRequests uint64
-	numRemovingRequests uint64
-	numDocumentsIndexed uint64
-	numDocumentsRemoved uint64
-	numDocumentsStored  uint64
-	numTokenIndexAdded  uint64
+	numDocumentsIndexed      uint64
+	numDocumentsRemoved      uint64
+	numDocumentsForceUpdated uint64
+	numIndexingRequests      uint64
+	numRemovingRequests      uint64
+	numForceUpdatingRequests uint64
+	numTokenIndexAdded       uint64
+	numDocumentsStored       uint64
 
 	// 记录初始化参数
 	initOptions types.EngineInitOptions
@@ -42,10 +45,10 @@ type Engine struct {
 	dbs        []storage.Storage
 
 	// 建立索引器使用的通信通道
-	segmenterChannel           chan segmenterRequest
-	indexerAddDocumentChannels []chan indexerAddDocumentRequest
-	indexerRemoveDocChannels   []chan indexerRemoveDocRequest
-	indexerLookupChannels      []chan indexerLookupRequest
+	segmenterChannel         chan segmenterRequest
+	indexerAddDocChannels    []chan indexerAddDocumentRequest
+	indexerRemoveDocChannels []chan indexerRemoveDocRequest
+	indexerLookupChannels    []chan indexerLookupRequest
 
 	// 建立排序器使用的通信通道
 	rankerAddDocChannels    []chan rankerAddDocRequest
@@ -93,14 +96,14 @@ func (engine *Engine) Init(options types.EngineInitOptions) {
 		chan segmenterRequest, options.NumSegmenterThreads)
 
 	// 初始化索引器通道
-	engine.indexerAddDocumentChannels = make(
+	engine.indexerAddDocChannels = make(
 		[]chan indexerAddDocumentRequest, options.NumShards)
 	engine.indexerRemoveDocChannels = make(
 		[]chan indexerRemoveDocRequest, options.NumShards)
 	engine.indexerLookupChannels = make(
 		[]chan indexerLookupRequest, options.NumShards)
 	for shard := 0; shard < options.NumShards; shard++ {
-		engine.indexerAddDocumentChannels[shard] = make(
+		engine.indexerAddDocChannels[shard] = make(
 			chan indexerAddDocumentRequest,
 			options.IndexerBufferLength)
 		engine.indexerRemoveDocChannels[shard] = make(
@@ -231,51 +234,70 @@ func (engine *Engine) Init(options types.EngineInitOptions) {
 // 将文档加入索引
 //
 // 输入参数：
-// 	docId	标识文档编号，必须唯一
-// 	data	见DocumentIndexData注释
+// 	docId       标识文档编号，必须唯一，docId == 0 表示非法文档（用于强制刷新索引），[1, +oo) 表示合法文档
+// 	data        见DocumentIndexData注释
+// 	forceUpdate 是否强制刷新 cache，如果设为 true，则尽快添加到索引，否则等待 cache 满之后一次全量添加
 //
 // 注意：
 // 	1. 这个函数是线程安全的，请尽可能并发调用以提高索引速度
 // 	2. 这个函数调用是非同步的，也就是说在函数返回时有可能文档还没有加入索引中，因此
-//         如果立刻调用Search可能无法查询到这个文档。强制刷新索引请调用FlushIndex函数。
-func (engine *Engine) IndexDocument(docId uint64, data types.DocumentIndexData) {
-	engine.internalIndexDocument(docId, data)
+// 	   如果立刻调用Search可能无法查询到这个文档。强制刷新索引请调用FlushIndex函数。
+func (engine *Engine) IndexDocument(docId uint64, data types.DocumentIndexData, forceUpdate bool) {
+	engine.internalIndexDocument(docId, data, forceUpdate)
 
 	hash := murmur.Murmur3([]byte(fmt.Sprint("%d", docId))) % uint32(engine.initOptions.PersistentStorageShards)
-	if engine.initOptions.UsePersistentStorage {
+	if engine.initOptions.UsePersistentStorage && docId != 0 {
 		engine.persistentStorageIndexDocumentChannels[hash] <- persistentStorageIndexDocumentRequest{docId: docId, data: data}
 	}
 }
 
-func (engine *Engine) internalIndexDocument(docId uint64, data types.DocumentIndexData) {
+func (engine *Engine) internalIndexDocument(
+	docId uint64, data types.DocumentIndexData, forceUpdate bool) {
 	if !engine.initialized {
 		log.Fatal("必须先初始化引擎")
 	}
 
-	atomic.AddUint64(&engine.numIndexingRequests, 1)
+	if docId != 0 {
+		atomic.AddUint64(&engine.numIndexingRequests, 1)
+	}
+	if forceUpdate {
+		atomic.AddUint64(&engine.numForceUpdatingRequests, 1)
+	}
 	hash := murmur.Murmur3([]byte(fmt.Sprint("%d%s", docId, data.GetContent())))
 	engine.segmenterChannel <- segmenterRequest{
-		docId: docId, hash: hash, data: data}
+		docId: docId, hash: hash, data: data, forceUpdate: forceUpdate}
 }
 
 // 将文档从索引中删除
 //
 // 输入参数：
-// 	docId	标识文档编号，必须唯一
+// 	docId       标识文档编号，必须唯一，docId == 0 表示非法文档（用于强制刷新索引），[1, +oo) 表示合法文档
+// 	forceUpdate 是否强制刷新 cache，如果设为 true，则尽快删除索引，否则等待 cache 满之后一次全量删除
 //
-// 注意：这个函数仅从排序器中删除文档，索引器不会发生变化。
-func (engine *Engine) RemoveDocument(docId uint64) {
+// 注意：
+// 	1. 这个函数是线程安全的，请尽可能并发调用以提高索引速度
+// 	2. 这个函数调用是非同步的，也就是说在函数返回时有可能文档还没有加入索引中，因此
+// 	   如果立刻调用Search可能无法查询到这个文档。强制刷新索引请调用FlushIndex函数。
+func (engine *Engine) RemoveDocument(docId uint64, forceUpdate bool) {
 	if !engine.initialized {
 		log.Fatal("必须先初始化引擎")
 	}
 
-	atomic.AddUint64(&engine.numRemovingRequests, 1)
+	if docId != 0 {
+		atomic.AddUint64(&engine.numRemovingRequests, 1)
+	}
+	if forceUpdate {
+		atomic.AddUint64(&engine.numForceUpdatingRequests, 1)
+	}
 	for shard := 0; shard < engine.initOptions.NumShards; shard++ {
-		engine.indexerRemoveDocChannels[shard] <- indexerRemoveDocRequest{docId: docId}
+		engine.indexerRemoveDocChannels[shard] <- indexerRemoveDocRequest{docId: docId, forceUpdate: forceUpdate}
+		if docId == 0 {
+			continue
+		}
 		engine.rankerRemoveDocChannels[shard] <- rankerRemoveDocRequest{docId: docId}
 	}
 
-	if engine.initOptions.UsePersistentStorage {
+	if engine.initOptions.UsePersistentStorage && docId != 0 {
 		// 从数据库中删除
 		// NOTE: (zanwen) 为保证数据安全，需要 channel 来搞
 		hash := murmur.Murmur3([]byte(fmt.Sprint("%d", docId))) % uint32(engine.initOptions.PersistentStorageShards)
@@ -333,19 +355,6 @@ func (engine *Engine) LookupDocumentField(docId uint64) (output types.LookupFiel
 		}
 	}
 	return
-}
-
-// 阻塞等待直到所有索引添加完毕
-func (engine *Engine) FlushIndex() {
-	for {
-		runtime.Gosched()
-		if engine.numIndexingRequests == engine.numDocumentsIndexed &&
-			engine.numRemovingRequests*uint64(engine.initOptions.NumShards) == engine.numDocumentsRemoved &&
-			(!engine.initOptions.UsePersistentStorage ||
-				engine.numIndexingRequests == engine.numDocumentsStored) {
-			return
-		}
-	}
 }
 
 // 查找满足搜索条件的文档，此函数线程安全
@@ -466,6 +475,23 @@ func (engine *Engine) Search(request types.SearchRequest) (output types.SearchRe
 	output.NumDocs = numDocs
 	output.Timeout = isTimeout
 	return
+}
+
+// 阻塞等待直到所有索引添加完毕
+func (engine *Engine) FlushIndex() {
+	// 强制更新，CHANNEL 中 REQUESTS 的无序性可能会导致 CACHE 中有残留
+	engine.RemoveDocument(0, true)
+	engine.IndexDocument(0, types.DocumentIndexData{}, true)
+	for {
+		runtime.Gosched()
+		if engine.numIndexingRequests == engine.numDocumentsIndexed &&
+			engine.numRemovingRequests*uint64(engine.initOptions.NumShards) == engine.numDocumentsRemoved &&
+			engine.numForceUpdatingRequests*uint64(engine.initOptions.NumShards) ==
+				engine.numDocumentsForceUpdated && (!engine.initOptions.UsePersistentStorage ||
+			engine.numIndexingRequests == engine.numDocumentsStored) {
+			return
+		}
+	}
 }
 
 // 关闭引擎

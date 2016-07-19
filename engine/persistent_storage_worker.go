@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"github.com/yingtu/wukong/types"
 	"sync/atomic"
+
+	"github.com/yingtu/wukong/types"
 )
 
 type persistentStorageIndexDocumentRequest struct {
@@ -58,7 +59,7 @@ func (engine *Engine) persistentStorageInitWorker(shard int) {
 		err := dec.Decode(&data)
 		if err == nil {
 			// 添加索引
-			engine.internalIndexDocument(docId, data)
+			engine.internalIndexDocument(docId, data, false)
 		}
 		return nil
 	})

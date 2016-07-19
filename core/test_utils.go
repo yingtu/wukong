@@ -2,14 +2,16 @@ package core
 
 import (
 	"fmt"
+
 	"github.com/yingtu/wukong/types"
 )
 
 func indicesToString(indexer *Indexer, token string) (output string) {
-	indices := indexer.tableLock.table[token]
-	for i := 0; i < indexer.getIndexLength(indices); i++ {
-		output += fmt.Sprintf("%d ",
-			indexer.getDocId(indices, i))
+	if indices, ok := indexer.tableLock.table[token]; ok {
+		for i := 0; i < indexer.getIndexLength(indices); i++ {
+			output += fmt.Sprintf("%d ",
+				indexer.getDocId(indices, i))
+		}
 	}
 	return
 }

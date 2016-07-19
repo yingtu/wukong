@@ -1,11 +1,12 @@
 package core
 
 import (
-	"github.com/yingtu/wukong/types"
-	"github.com/yingtu/wukong/utils"
 	"log"
 	"sort"
 	"sync"
+
+	"github.com/yingtu/wukong/types"
+	"github.com/yingtu/wukong/utils"
 )
 
 type Ranker struct {
