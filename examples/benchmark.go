@@ -163,6 +163,8 @@ func main() {
 		searcher.RemoveDocument(uint64(i), false)
 	}
 	searcher.FlushIndex()
+	runtime.GC()
+
 	t3 := time.Now()
 	log.Printf("删除 %d 条索引花费时间 %v", *num_delete_docs, t3.Sub(t2))
 
