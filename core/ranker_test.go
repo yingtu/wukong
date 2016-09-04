@@ -1,6 +1,7 @@
 package core
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -11,22 +12,26 @@ import (
 type DummyScoringFields struct {
 	label   string
 	counter int
-	amount  float32
+	amount  float64
 }
 
 type DummyScoringCriteria struct {
-	Threshold float32
+	Threshold float64
 }
 
 func (criteria DummyScoringCriteria) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	queryFields interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	if reflect.TypeOf(fields) == reflect.TypeOf(DummyScoringFields{}) {
 		dsf := fields.(DummyScoringFields)
-		value := float32(dsf.counter) + dsf.amount
-		if value < criteria.Threshold {
+		value := float64(dsf.counter) + dsf.amount
+		if reflect.TypeOf(queryFields) == reflect.TypeOf(DummyScoringFields{}) {
+			qf := queryFields.(DummyScoringFields)
+			value = math.Abs(value - float64(qf.counter) - qf.amount)
+		}
+		if criteria.Threshold != 0 && value > criteria.Threshold {
 			return []float32{}
 		}
-		return []float32{value}
+		return []float32{float32(value)}
 	}
 	return []float32{}
 }
@@ -51,7 +56,7 @@ func TestRankDocument(t *testing.T) {
 		types.IndexedDocument{DocId: 2, BM25: 0},
 		types.IndexedDocument{DocId: 4, BM25: 18},
 	}, types.RankOptions{ScoringCriteria: types.RankByBM25{}, ReverseOrder: true}, false)
-	// doc0因为没有AddDoc所以没有添加进来
+	// doc2因为没有AddDoc所以没有添加进来
 	utils.Expect(t, "[1 [6000 ]] [4 [18000 ]] [3 [24000 ]] ", scoredDocsToString(scoredDocs))
 }
 
@@ -80,22 +85,24 @@ func TestRankWithCriteria(t *testing.T) {
 	})
 
 	criteria := DummyScoringCriteria{}
+	queryFields := DummyScoringFields{label: "ganga", counter: 5, amount: 10.3}
 	scoredDocs, _ := ranker.Rank([]types.IndexedDocument{
 		types.IndexedDocument{DocId: 1, TokenProximity: 6},
 		types.IndexedDocument{DocId: 2, TokenProximity: -1},
 		types.IndexedDocument{DocId: 3, TokenProximity: 24},
 		types.IndexedDocument{DocId: 4, TokenProximity: 18},
-	}, types.RankOptions{ScoringCriteria: criteria}, false)
-	utils.Expect(t, "[1 [25300 ]] [3 [17300 ]] [2 [3000 ]] [4 [1300 ]] ", scoredDocsToString(scoredDocs))
+	}, types.RankOptions{ScoringCriteria: criteria, QueryFields: queryFields, ReverseOrder: true}, false)
+	utils.Expect(t, "[3 [2000 ]] [1 [10000 ]] [2 [12300 ]] [4 [14000 ]] ", scoredDocsToString(scoredDocs))
 
-	criteria.Threshold = 4
+	criteria.Threshold = 10.0
+	queryFields.amount = 1.3
 	scoredDocs, _ = ranker.Rank([]types.IndexedDocument{
 		types.IndexedDocument{DocId: 1, TokenProximity: 6},
 		types.IndexedDocument{DocId: 2, TokenProximity: -1},
 		types.IndexedDocument{DocId: 3, TokenProximity: 24},
 		types.IndexedDocument{DocId: 4, TokenProximity: 18},
-	}, types.RankOptions{ScoringCriteria: criteria}, false)
-	utils.Expect(t, "[1 [25300 ]] [3 [17300 ]] ", scoredDocsToString(scoredDocs))
+	}, types.RankOptions{ScoringCriteria: criteria, QueryFields: queryFields, ReverseOrder: true}, false)
+	utils.Expect(t, "[2 [3300 ]] [4 [5000 ]] ", scoredDocsToString(scoredDocs))
 }
 
 func TestRemoveDoc(t *testing.T) {

@@ -16,7 +16,7 @@ type MyScoringFields struct {
 type MyScoringCriteria struct {
 }
 func (criteria MyScoringCriteria) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	queryFields interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	// 首先检查评分字段是否为MyScoringFields类型的，如果不是则返回空切片，此文档将从结果中剔除
 	if reflect.TypeOf(fields) != reflect.TypeOf(MySearchFields{}) {
 		return []float32{}
@@ -25,7 +25,7 @@ func (criteria MyScoringCriteria) Score(
 	// 匹配则进行类型转换
 	myFields := fields.(MySearchFields)
 	
-	// 下面利用myFields中的数据给文档评分并返回分值
+	// 下面利用myFields中的数据给文档评分并返回分值，如果需要可以根据 queryFields 自定义字段计算评分
 }
 ```
 

@@ -17,8 +17,8 @@ import (
 	"encoding/gob"
 	"flag"
 	"fmt"
-	"github.com/huichen/wukong/engine"
-	"github.com/huichen/wukong/types"
+	"github.com/yingtu/wukong/engine"
+	"github.com/yingtu/wukong/types"
 	"log"
 	"os"
 	"reflect"
@@ -75,7 +75,7 @@ type WeiboScoringCriteria struct {
 }
 
 func (criteria WeiboScoringCriteria) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	_ interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	if doc.TokenProximity > MaxTokenProximity { // 评分第一步
 		return []float32{}
 	}
@@ -142,7 +142,7 @@ func main() {
 	log.Print("建立索引")
 	for i, text := range lines {
 		searcher.IndexDocument(uint64(i),
-			types.DocumentIndexData{Content: text, Fields: fieldsSlice[i]})
+			types.DocumentIndexData{Content: text, Fields: fieldsSlice[i]}, false)
 	}
 	searcher.FlushIndex()
 	log.Print("索引建立完毕")

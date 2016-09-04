@@ -34,6 +34,9 @@ type RankOptions struct {
 	// 文档的评分规则，值为nil时使用Engine初始化时设定的规则
 	ScoringCriteria ScoringCriteria
 
+	// 搜索带入的用于计算排序评分字段
+	QueryFields interface{}
+
 	// 默认情况下（ReverseOrder=false）按照分数从大到小排序，否则从小到大排序
 	ReverseOrder bool
 

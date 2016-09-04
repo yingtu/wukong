@@ -101,7 +101,7 @@ func (ranker *Ranker) Rank(
 			fs := ranker.lock.fields[d.DocId]
 			ranker.lock.RUnlock()
 			// 计算评分并剔除没有分值的文档
-			scores := options.ScoringCriteria.Score(d, fs)
+			scores := options.ScoringCriteria.Score(options.QueryFields, d, fs)
 			if len(scores) > 0 {
 				if !countDocsOnly {
 					outputDocs = append(outputDocs, types.ScoredDocument{

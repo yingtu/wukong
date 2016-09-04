@@ -2,12 +2,13 @@ package engine
 
 import (
 	"encoding/gob"
-	"github.com/yingtu/wukong/types"
-	"github.com/yingtu/wukong/utils"
 	"os"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/yingtu/wukong/types"
+	"github.com/yingtu/wukong/utils"
 )
 
 type ScoringFields struct {
@@ -16,7 +17,6 @@ type ScoringFields struct {
 
 func AddDocs(engine *Engine) {
 	docId := uint64(1)
-	// 因为需要保证文档全部被加入到索引中，所以 forceUpdate 全部设置成 true
 	engine.IndexDocument(docId, types.DocumentIndexData{
 		Content: "中国有十三亿人口人口",
 		Fields:  ScoringFields{1, 2, 3},
@@ -44,11 +44,45 @@ func AddDocs(engine *Engine) {
 	engine.FlushIndex()
 }
 
+func addDocsWithLabels(engine *Engine) {
+	docId := uint64(1)
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Content: "此次百度收购将成中国互联网最大并购",
+		Labels:  []string{"百度", "中国"},
+		Fields:  ScoringFields{1, 2, 3},
+	}, false)
+	docId++
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Content: "百度宣布拟全资收购91无线业务",
+		Labels:  []string{"百度"},
+		Fields:  nil,
+	}, false)
+	docId++
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Content: "百度是中国最大的搜索引擎",
+		Labels:  []string{"百度"},
+		Fields:  ScoringFields{2, 3, 1},
+	}, false)
+	docId++
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Content: "百度在研制无人汽车",
+		Labels:  []string{"百度"},
+		Fields:  ScoringFields{2, 3, 3},
+	}, false)
+	docId++
+	engine.IndexDocument(docId, types.DocumentIndexData{
+		Content: "BAT是中国互联网三巨头",
+		Labels:  []string{"百度"},
+		Fields:  ScoringFields{0, 9, 1},
+	}, false)
+	engine.FlushIndex()
+}
+
 type RankByTokenProximity struct {
 }
 
 func (rule RankByTokenProximity) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	_ interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	if doc.TokenProximity < 0 {
 		return []float32{}
 	}
@@ -143,7 +177,7 @@ type TestScoringCriteria struct {
 }
 
 func (criteria TestScoringCriteria) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	_ interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	if reflect.TypeOf(fields) != reflect.TypeOf(ScoringFields{}) {
 		return []float32{}
 	}
@@ -200,7 +234,7 @@ type BM25ScoringCriteria struct {
 }
 
 func (criteria BM25ScoringCriteria) Score(
-	doc types.IndexedDocument, fields interface{}) []float32 {
+	_ interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
 	if reflect.TypeOf(fields) != reflect.TypeOf(ScoringFields{}) {
 		return []float32{}
 	}
@@ -242,7 +276,7 @@ func TestRemoveDocument(t *testing.T) {
 
 	AddDocs(&engine)
 	engine.RemoveDocument(5, false)
-	engine.RemoveDocument(6, true)
+	engine.RemoveDocument(6, false)
 	engine.FlushIndex()
 	engine.IndexDocument(6, types.DocumentIndexData{
 		Content: "中国人口有十三亿",
@@ -281,7 +315,7 @@ func TestEngineIndexDocumentWithTokens(t *testing.T) {
 			{"人口", []int{18, 24}},
 		},
 		Fields: ScoringFields{1, 2, 3},
-	}, true)
+	}, false)
 	docId++
 	engine.IndexDocument(docId, types.DocumentIndexData{
 		Content: "",
@@ -290,13 +324,12 @@ func TestEngineIndexDocumentWithTokens(t *testing.T) {
 			{"人口", []int{6}},
 		},
 		Fields: ScoringFields{1, 2, 3},
-	}, true)
+	}, false)
 	docId++
 	engine.IndexDocument(docId, types.DocumentIndexData{
 		Content: "中国十三亿人口",
 		Fields:  ScoringFields{0, 9, 1},
-	}, true)
-
+	}, false)
 	engine.FlushIndex()
 
 	outputs := engine.Search(types.SearchRequest{Text: "中国人口"})
@@ -318,59 +351,48 @@ func TestEngineIndexDocumentWithTokens(t *testing.T) {
 	utils.Expect(t, "[0 18]", outputs.Docs[2].TokenSnippetLocations)
 }
 
-func TestEngineIndexDocumentOnlyWithLabels(t *testing.T) {
-	var engine Engine
-	engine.Init(types.EngineInitOptions{
-		SegmenterDictionaries: "../testdata/test_dict.txt",
+func TestEngineIndexDocumentWithContentAndLabelsAndFields(t *testing.T) {
+	var engine1, engine2 Engine
+	engine1.Init(types.EngineInitOptions{
+		SegmenterDictionaries: "../data/dictionary.txt",
+		IndexerInitOptions: &types.IndexerInitOptions{
+			IndexType: types.LocationsIndex,
+		},
+	})
+	engine2.Init(types.EngineInitOptions{
+		SegmenterDictionaries: "../data/dictionary.txt",
+		IndexerInitOptions: &types.IndexerInitOptions{
+			IndexType: types.DocIdsIndex,
+		},
 	})
 
-	docId := uint64(1)
-	engine.IndexDocument(docId, types.DocumentIndexData{
-		Labels: []string{"中国", "人口"},
-		Fields: ScoringFields{1, 2, 3},
-	}, true)
-	docId++
-	engine.IndexDocument(docId, types.DocumentIndexData{
-		Labels: []string{"中国", "十三亿", "人口"},
-		Fields: ScoringFields{0, 9, 1},
-	}, true)
+	addDocsWithLabels(&engine1)
+	addDocsWithLabels(&engine2)
 
-	engine.FlushIndex()
-	outputs := engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
-	utils.Expect(t, "0", len(outputs.Tokens))
-	utils.Expect(t, "2", len(outputs.Docs))
-	utils.Expect(t, "[0]", outputs.Docs[0].Scores)
+	outputs1 := engine1.Search(types.SearchRequest{Text: "百度"})
+	outputs2 := engine2.Search(types.SearchRequest{Text: "百度"})
+	utils.Expect(t, "1", len(outputs1.Tokens))
+	utils.Expect(t, "1", len(outputs2.Tokens))
+	utils.Expect(t, "百度", outputs1.Tokens[0])
+	utils.Expect(t, "百度", outputs2.Tokens[0])
+	utils.Expect(t, "5", len(outputs1.Docs))
+	utils.Expect(t, "5", len(outputs2.Docs))
 
-	output := engine.LookupDocumentField(2)
-	utils.Expect(t, "2", output.DocId)
-	utils.Expect(t, "{0 9 1}", output.Fields)
+	output := engine1.LookupDocumentField(1)
+	utils.Expect(t, "1", output.DocId)
+	utils.Expect(t, "{1 2 3}", output.Fields)
 
-	engine.UpdateDocumentField(2, ScoringFields{3, 2, 1})
 	// 因为 FlushIndex 暂时不支持 Update 操作，这里手动等待
+	engine1.UpdateDocumentField(1, ScoringFields{3, 2, 1})
 	time.Sleep(2 * time.Second)
-	output = engine.LookupDocumentField(2)
+	output = engine1.LookupDocumentField(1)
 	utils.Expect(t, "{3 2 1}", output.Fields)
 
-	engine.RemoveDocument(2, true)
-	engine.FlushIndex()
-	outputs = engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
-	utils.Expect(t, "1", len(outputs.Docs))
-
-	output = engine.LookupDocumentField(2)
+	engine1.RemoveDocument(1, false)
+	time.Sleep(2 * time.Second)
+	engine1.FlushIndex()
+	output = engine1.LookupDocumentField(1)
 	utils.Expect(t, "<nil>", output.Fields)
-
-	engine.IndexDocument(docId, types.DocumentIndexData{
-		Labels: []string{"中国", "十三亿", "人口", "尴尬啊"},
-		Fields: ScoringFields{7, 8, 9},
-	}, true)
-
-	engine.FlushIndex()
-	outputs = engine.Search(types.SearchRequest{Labels: []string{"中国", "人口"}})
-	utils.Expect(t, "2", len(outputs.Docs))
-
-	output = engine.LookupDocumentField(2)
-	utils.Expect(t, "2", output.DocId)
-	utils.Expect(t, "{7 8 9}", output.Fields)
 }
 
 func TestEngineIndexDocumentWithPersistentStorage(t *testing.T) {
@@ -445,7 +467,7 @@ func TestCountDocsOnly(t *testing.T) {
 	})
 
 	AddDocs(&engine)
-	engine.RemoveDocument(5, true)
+	engine.RemoveDocument(5, false)
 	engine.FlushIndex()
 
 	outputs := engine.Search(types.SearchRequest{Text: "中国人口", CountDocsOnly: true})
@@ -490,62 +512,4 @@ func TestSearchWithin(t *testing.T) {
 	utils.Expect(t, "5", outputs.Docs[1].DocId)
 	utils.Expect(t, "100", int(outputs.Docs[1].Scores[0]*1000))
 	utils.Expect(t, "[0 15]", outputs.Docs[1].TokenSnippetLocations)
-}
-
-func TestLookupWithLocations1(t *testing.T) {
-
-	type Data struct {
-		Id      int
-		Content string
-		Labels  []string
-	}
-
-	datas := make([]Data, 0)
-
-	data0 := Data{Id: 0, Content: "此次百度收购将成中国互联网最大并购", Labels: []string{"百度", "中国"}}
-	datas = append(datas, data0)
-
-	data1 := Data{Id: 1, Content: "百度宣布拟全资收购91无线业务", Labels: []string{"百度"}}
-	datas = append(datas, data1)
-
-	data2 := Data{Id: 2, Content: "百度是中国最大的搜索引擎", Labels: []string{"百度"}}
-	datas = append(datas, data2)
-
-	data3 := Data{Id: 3, Content: "百度在研制无人汽车", Labels: []string{"百度"}}
-	datas = append(datas, data3)
-
-	data4 := Data{Id: 4, Content: "BAT是中国互联网三巨头", Labels: []string{"百度"}}
-	datas = append(datas, data4)
-
-	// 初始化
-	searcher_locations := Engine{}
-	searcher_locations.Init(types.EngineInitOptions{
-		SegmenterDictionaries: "../data/dictionary.txt",
-		IndexerInitOptions: &types.IndexerInitOptions{
-			IndexType: types.LocationsIndex,
-		},
-	})
-	defer searcher_locations.Close()
-	for _, data := range datas {
-		searcher_locations.IndexDocument(uint64(data.Id), types.DocumentIndexData{Content: data.Content, Labels: data.Labels}, true)
-	}
-	searcher_locations.FlushIndex()
-	res_locations := searcher_locations.Search(types.SearchRequest{Text: "百度"})
-
-	searcher_docids := Engine{}
-	searcher_docids.Init(types.EngineInitOptions{
-		SegmenterDictionaries: "../data/dictionary.txt",
-		IndexerInitOptions: &types.IndexerInitOptions{
-			IndexType: types.DocIdsIndex,
-		},
-	})
-	defer searcher_docids.Close()
-	for _, data := range datas {
-		searcher_docids.IndexDocument(uint64(data.Id), types.DocumentIndexData{Content: data.Content, Labels: data.Labels}, true)
-	}
-	searcher_docids.FlushIndex()
-	res_docids := searcher_docids.Search(types.SearchRequest{Text: "百度"})
-	if res_docids.NumDocs != res_locations.NumDocs {
-		t.Errorf("期待的搜索结果个数=\"%d\", 实际=\"%d\"", res_docids.NumDocs, res_locations.NumDocs)
-	}
 }

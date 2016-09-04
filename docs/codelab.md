@@ -134,7 +134,7 @@ type WeiboScoringCriteria struct {
 }
 
 func (criteria WeiboScoringCriteria) Score(
-        doc types.IndexedDocument, fields interface{}) []float32 {
+        _ interface{}, doc types.IndexedDocument, fields interface{}) []float32 {
         if reflect.TypeOf(fields) != reflect.TypeOf(WeiboScoringFields{}) {
                 return []float32{}
         }
@@ -150,10 +150,11 @@ func (criteria WeiboScoringCriteria) Score(
         return output
 }
 ```
-WeiboScoringCriteria实际上继承了types.ScoringCriteria接口，这个接口实现了Score函数。这个函数带有两个参数：
+WeiboScoringCriteria实际上继承了types.ScoringCriteria接口，这个接口实现了Score函数。这个函数带有三个参数：
 
-1. types.IndexedDocument参数传递了从索引器中得到的数据，比如词频，词的具体位置，BM25值，紧邻度等信息，具体见[types/index.go](/types/index.go)的注释。
-2. 第二个参数是interface{}类型的，你可以把这个类型理解成C语言中的void指针，它可以指向任何数据类型。在我们的例子中指向的是WeiboScoringFields结构体，并通过反射机制检查是否是正确的类型。
+1. 第一个参数是interface{}类型的，你可以把这个类型理解成C语言中的void指针，它可以指向任何数据类型的quertFields自定义结构体，用于计算评分。在本例子中暂时不需要。
+2. types.IndexedDocument参数传递了从索引器中得到的数据，比如词频，词的具体位置，BM25值，紧邻度等信息，具体见[types/index.go](/types/index.go)的注释。
+3. 第三个参数是interface{}类型的，在我们的例子中指向的是WeiboScoringFields结构体，并通过反射机制检查是否是正确的类型。
 
 有了自定义评分数据和自定义评分规则，我们就可以进行搜索了，见下面的代码
 
